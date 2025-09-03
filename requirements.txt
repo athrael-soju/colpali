@@ -1,0 +1,10 @@
+pillow
+transformers
+colpali-engine[train]
+accelerate
+bitsandbytes
+flash-attn
+datasets
+pynvml
+wandb
+mteb
