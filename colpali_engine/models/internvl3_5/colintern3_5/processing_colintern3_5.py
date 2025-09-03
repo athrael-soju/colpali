@@ -8,15 +8,13 @@ from typing import ClassVar, List, Optional, Tuple, Union
 import torch
 from PIL import Image
 
-try:
-    from processing_internvl import InternVLProcessor
-except Exception:
-    from transformers.models.internvl.processing_internvl import InternVLProcessor  # type: ignore
-
+from transformers.models.internvl.processing_internvl import InternVLProcessor  # type: ignore
 from transformers import BatchEncoding, BatchFeature
+from colpali_engine.utils.processing_utils import BaseVisualRetrieverProcessor
+from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 
 
-class ColIntern3_5_Processor(InternVLProcessor):  # noqa: N801
+class ColIntern3_5_Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  # noqa: N801
     """
     Processor tailored for ColIntern3.5 training & inference.
 
@@ -40,6 +38,26 @@ class ColIntern3_5_Processor(InternVLProcessor):  # noqa: N801
         tok = getattr(self, "tokenizer", None)
         return getattr(tok, "pad_token", "") if tok is not None else ""
 
+    @classmethod
+    def from_pretrained(
+        cls,
+        *args,
+        device_map: Optional[str] = None,
+        **kwargs,
+    ):
+        instance = super().from_pretrained(
+            *args,
+            device_map=device_map,
+            **kwargs,
+        )
+
+        if "max_num_visual_tokens" in kwargs:
+            instance.image_processor.max_pixels = kwargs["max_num_visual_tokens"] * 28 * 28
+            instance.image_processor.size["longest_edge"] = instance.image_processor.max_pixels
+
+        return instance
+
+
     def process_images(self, images: List[Image.Image]) -> Union[BatchFeature, BatchEncoding]:
         images = [im.convert("RGB") for im in images]
         image_inputs = self.image_processor(images=images, return_tensors="pt")
@@ -56,51 +74,46 @@ class ColIntern3_5_Processor(InternVLProcessor):  # noqa: N801
         )
         return BatchEncoding(enc.data)
 
-    # -------- Retrieval scoring (late interaction) --------
-    @staticmethod
-    def score_multi_vector(
-        qs: torch.Tensor,  # (Bq, M, D)
-        ps: torch.Tensor,  # (Bd, N, D)
-        q_mask: Optional[torch.Tensor] = None,
+    def score(
+        self,
+        qs: List[torch.Tensor],
+        ps: List[torch.Tensor],
         device: Optional[Union[str, torch.device]] = None,
-        chunk_docs: Optional[int] = None,
+        **kwargs,
     ) -> torch.Tensor:
         """
-        Compute late-interaction scores S in R^{Bq x Bd}: sum_m max_n dot(q_m, p_n).
-
-        Args:
-            qs: query token embeddings (Bq, M, D)
-            ps: passage/document patch embeddings (Bd, N, D)
-            q_mask: optional mask on query tokens (Bq, M)
-            device: compute device
-            chunk_docs: if provided, compute over documents in chunks to limit memory
-
-        Returns:
-            scores: (Bq, Bd)
+        Compute the MaxSim score (ColBERT-like) for the given multi-vector query and passage embeddings.
         """
-        device = device or (qs.device if isinstance(qs, torch.Tensor) else "cpu")
-        qs = qs.to(device)
-        ps = ps.to(device)
-        if q_mask is not None:
-            q_mask = q_mask.to(device)
+        return self.score_multi_vector(qs, ps, device=device, **kwargs)
 
-        if chunk_docs is None:
-            sim = torch.einsum("qmd,pnd->qmpn", qs, ps)  # (Bq, Bd, M, N)
-            max_sim = sim.max(dim=-1).values               # (Bq, Bd, M)
-            if q_mask is not None:
-                max_sim = max_sim * q_mask.unsqueeze(1)
-            scores = max_sim.sum(dim=-1)                   # (Bq, Bd)
-            return scores
+    
 
-        # Chunk over documents to reduce peak memory
-        scores_list = []
-        Bd = ps.size(0)
-        for start in range(0, Bd, chunk_docs):
-            end = min(Bd, start + chunk_docs)
-            sim = torch.einsum("qmd,pnd->qmpn", qs, ps[start:end])
-            max_sim = sim.max(dim=-1).values
-            if q_mask is not None:
-                max_sim = max_sim * q_mask.unsqueeze(1)
-            scores = max_sim.sum(dim=-1)  # (Bq, end-start)
-            scores_list.append(scores)
-        return torch.cat(scores_list, dim=1)
+    def get_n_patches(
+        self,
+        image_size: Tuple[int, int],
+        spatial_merge_size: int,
+    ) -> Tuple[int, int]:
+        """
+        Get the number of patches (n_patches_x, n_patches_y) that will be used to process an image of
+        size (height, width) with the given patch size.
+
+        The `spatial_merge_size` is the number of patches that will be merged spatially. It is stored in
+        as a `Qwen2VLForConditionalGeneration` attribute under `model.spatial_merge_size`.
+        """
+        patch_size = self.image_processor.patch_size
+
+        height_new, width_new = smart_resize(
+            width=image_size[0],
+            height=image_size[1],
+            factor=patch_size * self.image_processor.merge_size,
+            min_pixels=self.image_processor.size["shortest_edge"],
+            max_pixels=self.image_processor.size["longest_edge"],
+        )
+
+        n_patches_x = width_new // patch_size // spatial_merge_size
+        n_patches_y = height_new // patch_size // spatial_merge_size
+
+        return n_patches_x, n_patches_y
+
+    def get_image_mask(self, batch_images: BatchFeature) -> torch.Tensor:
+        return batch_images.input_ids == self.image_token_id
