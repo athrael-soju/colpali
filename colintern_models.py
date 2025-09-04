@@ -19,7 +19,7 @@ class ColInternWrapper(ColPaliEngineWrapper):
 
     def __init__(self, model_name="vidore/colintern3.5", revision=None, device=None, **kwargs):
         batch_size = kwargs.pop("batch_size", 1)
-        num_workers = kwargs.pop("num_workers", 0)  # force single-process
+        num_workers = kwargs.pop("num_workers", 0)
         pin_memory = kwargs.pop("pin_memory", False)
         max_num_visual_tokens = kwargs.pop("max_num_visual_tokens", None)
 

@@ -78,14 +78,6 @@ def print_gpu_info(prefix: str = ""):
         print(f"{prefix}CUDA not available, using CPU")
 
 
-def tasks_from_benchmark(bench):
-    if hasattr(bench, "tasks") and bench.tasks:
-        return bench.tasks
-    if hasattr(bench, "create_tasks"):
-        return bench.create_tasks()
-    return [bench]
-
-
 def main():
     # === Configuration ===
     DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -93,7 +85,7 @@ def main():
     BENCHMARKS = ["ViDoRe(v1)", "ViDoRe(v2)"]
 
     MAX_VIS_TOKENS = int(os.getenv("MAX_VIS_TOKENS", "768"))
-    BATCH_SIZE = int(os.getenv("BATCH_SIZE", "64"))
+    BATCH_SIZE = int(os.getenv("BATCH_SIZE", "128"))
     NUM_WORKERS = 0  # hard zero (we also monkey-patch globally)
 
     if torch.cuda.is_available():
