@@ -11,7 +11,7 @@ from typing import Optional, Tuple, Union
 import torch
 from torch import nn
 
-from transformers.models.internvl import InternVLVisionConfig, InternVLModel
+from transformers.models.internvl import InternVLConfig, InternVLModel
 
 from transformers.utils import ModelOutput
 
@@ -50,15 +50,34 @@ class ColIntern3_5(InternVLModel):  # noqa: N801
     * FlashAttention-2 is enabled by passing `attn_implementation="flash_attention_2"` to
       `.from_pretrained(...)`.
     """
-
+    _checkpoint_conversion_mapping = {
+        # 1) top-level wrappers used by some trainers
+        r"^module\.": "",
+        r"^base_model\.model\.": "",
+        # 2) original InternVL wrappers (the converter maps “vision_model -> model.vision_tower”, etc.)
+        r"^vision_model": "model.vision_tower",
+        r"^language_model": "model.language_model",
+        # projector/head (see ORIGINAL_TO_CONVERTED_KEY_MAPPING_MULTI)
+        r"^mlp1\.0": "model.multi_modal_projector.layer_norm",
+        r"^mlp1\.1": "model.multi_modal_projector.linear_1",
+        r"^mlp1\.3": "model.multi_modal_projector.linear_2",
+        # 3) if your *saved* HF ckpt has a literal “model.” prefix (e.g., saved from InternVLForConditionalGeneration),
+        #    strip it back to the submodules your subclass expects:
+        r"^model\.vision_tower": "vision_tower",
+        r"^model\.language_model": "language_model",
+        r"^model\.multi_modal_projector": "multi_modal_projector",
+        # some savers escape the dot: "model\." shows up in state_dict keys
+        r"^model\\\.vision_tower": "vision_tower",
+        r"^model\\\.language_model": "language_model",
+        r"^model\\\.multi_modal_projector": "multi_modal_projector",
+    }
+    
     main_input_name = "doc_pixel_values"  # used by HF Trainer when batching documents
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
-        key_mapping = kwargs.pop("key_mapping", None)
-        if key_mapping is None:
-            key_mapping = super()._checkpoint_conversion_mapping
-        return super().from_pretrained(*args, **kwargs, key_mapping=key_mapping)
+        kwargs.setdefault("key_mapping", cls._checkpoint_conversion_mapping)
+        return super().from_pretrained(*args, **kwargs)
 
     def __init__(self, config: InternVLConfig, output_dim: int = 128, mask_non_image_embeddings: bool = False):
         super().__init__(config)
