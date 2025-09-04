@@ -1,234 +1,240 @@
 # coding=utf-8
-# ColIntern3.5: InternVL3.5-based multi-vector retriever (ColBERT-style)
-# Copyright 2025
-# Licensed under the Apache 2.0 License.
+# ColIntern3.5: InternVL3.5-based late-interaction retriever (image/text encoders + 128-d projections)
 
 from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Optional, Tuple, Union
+from typing import ClassVar, Optional
 
 import torch
 from torch import nn
+from transformers.models.internvl.modeling_internvl import (
+    InternVLConfig,
+    InternVLForConditionalGeneration,
+    InternVLPreTrainedModel,
+)
 
-from transformers.models.internvl import InternVLConfig, InternVLModel
 
-from transformers.utils import ModelOutput
-
-
-@dataclass
-class ColInternOutput(ModelOutput):
-    """Output of ColIntern3.5 forward pass.
-
-    Args:
-        loss: Optional training loss (when both query and document are provided).
-        query_embeddings: Query token embeddings of shape (batch, M_tokens, 128) if computed.
-        doc_embeddings: Document patch embeddings of shape (batch, N_patches, 128) if computed.
+class ColIntern3_5(InternVLPreTrainedModel):  # noqa: N801
     """
-    loss: Optional[torch.FloatTensor] = None
-    query_embeddings: Optional[torch.FloatTensor] = None
-    doc_embeddings: Optional[torch.FloatTensor] = None
+    ColIntern3.5 wraps InternVL3.5 and exposes two embedding paths:
 
+      • Text-only  (input_ids, attention_mask)  -> (B, L, 128)
+      • Image-only (pixel_values)               -> (B, N_patches, 128)
 
-class ColIntern3_5(InternVLModel):  # noqa: N801
-    """ColIntern 3.5 model.
-
-    This class wraps the InternVL3.5 backbone and adds:
-      - 128-dim projection heads for vision patches and text tokens
-      - ColBERT-style late interaction utilities
-      - A training-mode forward that can compute the late-interaction CE loss with in-batch negatives
-
-    Notes
-    -----
-    * Vision encoding uses the InternVL *vision_tower* (ViT) directly to obtain patch-level features.
-      We exclude the [CLS] token and project each patch to 128-d.
-    * Text encoding uses the InternVL *language_model* to obtain token hidden states,
-      then projects to 128-d.
-
-    * All projections are L2-normalized so dot product equals cosine similarity.
-
-    * FlashAttention-2 is enabled by passing `attn_implementation="flash_attention_2"` to
-      `.from_pretrained(...)`.
+    Both outputs are L2-normalized, ColBERT-style.
     """
+
+    main_input_name: ClassVar[str] = "doc_input_ids"  # keeps HF Trainer happy for doc batches
+
+    # Robust key remapping so HF InternVL checkpoints load into this wrapper (which nests InternVL twice: model.model.*)
     _checkpoint_conversion_mapping = {
-        # 1) top-level wrappers used by some trainers
         r"^module\.": "",
         r"^base_model\.model\.": "",
-        # 2) original InternVL wrappers (the converter maps “vision_model -> model.vision_tower”, etc.)
-        r"^vision_model": "model.vision_tower",
-        r"^language_model": "model.language_model",
-        # projector/head (see ORIGINAL_TO_CONVERTED_KEY_MAPPING_MULTI)
-        r"^mlp1\.0": "model.multi_modal_projector.layer_norm",
-        r"^mlp1\.1": "model.multi_modal_projector.linear_1",
-        r"^mlp1\.3": "model.multi_modal_projector.linear_2",
-        # 3) if your *saved* HF ckpt has a literal “model.” prefix (e.g., saved from InternVLForConditionalGeneration),
-        #    strip it back to the submodules your subclass expects:
-        r"^model\.vision_tower": "vision_tower",
-        r"^model\.language_model": "language_model",
-        r"^model\.multi_modal_projector": "multi_modal_projector",
-        # some savers escape the dot: "model\." shows up in state_dict keys
-        r"^model\\\.vision_tower": "vision_tower",
-        r"^model\\\.language_model": "language_model",
-        r"^model\\\.multi_modal_projector": "multi_modal_projector",
+
+        # If checkpoint is InternVLForConditionalGeneration (usual): model.<submodule> -> model.model.<submodule>
+        r"^model\.vision_tower": "model.model.vision_tower",
+        r"^model\.language_model": "model.model.language_model",
+        r"^model\.multi_modal_projector": "model.model.multi_modal_projector",
+        r"^model\.lm_head": "model.lm_head",
+
+        # If checkpoint is lower-level InternVLModel or other converters
+        r"^vision_tower": "model.model.vision_tower",
+        r"^vision_model": "model.model.vision_tower",
+        r"^language_model": "model.model.language_model",
+        r"^multi_modal_projector": "model.model.multi_modal_projector",
+
+        # Idempotency (no-op if already model.model.*)
+        r"^model\.model\.vision_tower": "model.model.vision_tower",
+        r"^model\.model\.language_model": "model.model.language_model",
+        r"^model\.model\.multi_modal_projector": "model.model.multi_modal_projector",
     }
-    
-    main_input_name = "doc_pixel_values"  # used by HF Trainer when batching documents
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         kwargs.setdefault("key_mapping", cls._checkpoint_conversion_mapping)
         return super().from_pretrained(*args, **kwargs)
 
-    def __init__(self, config: InternVLConfig, output_dim: int = 128, mask_non_image_embeddings: bool = False):
-        super().__init__(config)
-        self.output_dim = int(output_dim)
+    def __init__(self, config: InternVLConfig, mask_non_image_embeddings: bool = False, output_dim: int = 128):
+        super().__init__(config=config)
+
+        # Keep the full HF backbone inside .model, like ColPali does
+        self.model = InternVLForConditionalGeneration(config=config)
+
+        # Propagate tied-weights bookkeeping for safe resize/tie
+        lm = getattr(self.model, "language_model", None)
+        if lm is not None and getattr(lm, "_tied_weights_keys", None):
+            self._tied_weights_keys = [f"model.language_model.{k}" for k in lm._tied_weights_keys]
+
+        # Retrieval head(s)
+        self.dim = int(output_dim)
+        txt_h = self.model.config.text_config.hidden_size
+        vis_h = self.model.vision_tower.config.hidden_size
+        self.custom_text_proj = nn.Linear(txt_h, self.dim, bias=False)
+        self.custom_vision_proj = nn.Linear(vis_h, self.dim, bias=False)
+
+        # Not doing generation
+        self.model.lm_head = torch.nn.Identity()
+
         self.mask_non_image_embeddings = bool(mask_non_image_embeddings)
-
-        # Separate projection heads (vision/text may have different hidden sizes)
-        self.vision_proj = nn.Linear(config.vision_config.hidden_size, self.output_dim, bias=False)
-        self.text_proj = nn.Linear(config.text_config.hidden_size, self.output_dim, bias=False)
-
-        # initialize newly added weights
         self.post_init()
 
-    # --------------------------
-    # Encoding helpers
-    # --------------------------
-    @torch.no_grad()
-    def embed_documents(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """Encode documents (images) into multi-vector patch embeddings (B, N_patches, 128).
-
-        Args:
-            pixel_values: float tensor (B, 3, H, W)
-
-        Returns:
-            doc_embeddings: (B, N_patches, 128) L2-normalized
-        """
-        self.eval()
-        pixel_values = pixel_values.to(dtype=self.dtype, device=self.device)
-        return self._encode_images(pixel_values)
-
+    # -----------------------
+    # Convenience encoders
+    # -----------------------
     @torch.no_grad()
     def embed_queries(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        """Encode text queries into multi-vector token embeddings (B, M_tokens, 128)."""
         self.eval()
-        return self._encode_queries(input_ids, attention_mask)
+        return self._encode_text(input_ids, attention_mask)
 
+    @torch.no_grad()
+    def embed_documents(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        return self._encode_images(pixel_values)
+    def floating_point_ops(self, inputs) -> int:
+        """
+        Very rough FLOPs estimator to satisfy HF Trainer logging.
+        Counts text tokens or vision patches and scales by layer/hidden size.
+        """
+        # Count sequence "tokens"
+        num_tokens = 0
+
+        # Text tokens (sum of attention_mask)
+        am = inputs.get("attention_mask", None)
+        if am is not None:
+            try:
+                num_tokens += int(am.sum().item())
+            except Exception:
+                pass
+
+        # Vision "tokens" (patches after merge)
+        px = inputs.get("pixel_values", None)
+        if px is not None and hasattr(px, "shape"):
+            try:
+                B, _, H, W = px.shape
+                patch = self.patch_size
+                merge = int(getattr(self.model, "spatial_merge_size", 2))
+                n_x = (W // (patch * merge))
+                n_y = (H // (patch * merge))
+                num_tokens += int(B * n_x * n_y)
+            except Exception:
+                pass
+
+        # If we couldn't compute anything, return 0 (Trainer will still proceed without warning)
+        if num_tokens == 0:
+            return 0
+
+        # Pick a depth/width based on which path this batch looks like
+        is_vision = ("pixel_values" in inputs) and ("input_ids" not in inputs)
+        if is_vision:
+            layers = int(self.model.vision_tower.config.num_hidden_layers)
+            hidden = int(self.model.vision_tower.config.hidden_size)
+        else:
+            layers = int(self.model.config.text_config.num_hidden_layers)
+            hidden = int(self.model.config.text_config.hidden_size)
+
+        # Super coarse: per-layer per-token ~ O(hidden) scaling; constant factor not critical for logging
+        return int(6 * num_tokens * hidden * layers)
+
+    # -----------------------
+    # Core encoding paths
+    # -----------------------
     def _encode_images(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        # Obtain patch-level embeddings from InternVL vision tower
-        # Returned shape: (B, 1+N_patches, H_dim). We drop the first [CLS]-like token.
-        vision_out = self.vision_tower(pixel_values=pixel_values)
-        patch_states = vision_out.last_hidden_state[:, 1:, :]  # (B, N_patches, H_dim)
+        device = next(self.parameters()).device
+        dtype = self.dtype
+        pixel_values = pixel_values.to(device=device, dtype=dtype)
 
-        # Project to 128-d and L2-normalize
-        proj = self.vision_proj(patch_states)  # (B, N_patches, 128)
+        # Vision-only forward: go straight to the vision tower (no text tokens required)
+        vision_out = self.model.vision_tower(pixel_values=pixel_values, return_dict=True)
+        patch_states = vision_out.last_hidden_state[:, 1:, :]  # drop CLS -> (B, N_patches, H_vis)
+
+        proj = self.custom_vision_proj(patch_states)           # (B, N_patches, 128)
         proj = proj / (proj.norm(dim=-1, keepdim=True) + 1e-12)
         return proj
 
-    def _encode_queries(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        # Text encoder forward (no images); obtain last hidden states per token
-        # Disable KV cache & request hidden states for stable training encodings.
-        outputs = self.language_model(
+    def _encode_text(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        device = next(self.parameters()).device
+        input_ids = input_ids.to(device=device)
+        attention_mask = attention_mask.to(device=device)
+
+        # Text-only forward on the LLM
+        outputs = self.model.language_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            use_cache=False,
-            output_hidden_states=False,
+            use_cache=False,                 # plays nicely with grad checkpointing
+            output_hidden_states=True,
             return_dict=True,
         )
-        hidden = outputs.last_hidden_state  # (B, M, H_dim)
-
-        # Project to 128-d and L2-normalize; mask pads
-        proj = self.text_proj(hidden)  # (B, M, 128)
+        hidden = outputs.hidden_states[-1]                         # (B, L, H_txt)
+        proj = self.custom_text_proj(hidden)                       # (B, L, 128)
         proj = proj / (proj.norm(dim=-1, keepdim=True) + 1e-12)
-        if attention_mask is not None:
-            proj = proj * attention_mask.unsqueeze(-1)
+        proj = proj * attention_mask.to(dtype=proj.dtype).unsqueeze(-1)
         return proj
-
-    @staticmethod
-    def _late_interaction_scores(q: torch.Tensor, d: torch.Tensor, q_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Compute pairwise late-interaction scores S in R^{B_q x B_d}.
-
-        Args:
-            q: (Bq, M, 128)  - query token embeddings
-            d: (Bd, N, 128)  - doc patch embeddings
-            q_mask: (Bq, M)  - 1 for valid tokens, 0 for padding
-
-        Returns:
-            scores: (Bq, Bd)
-        """
-        # sim[q, d, m, n] = dot(q[q, m], d[d, n])
-        sim = torch.einsum("qmd,pnd->qmpn", q, d)  # (Bq, Bd, M, N)
-        max_sim = sim.max(dim=-1).values               # (Bq, Bd, M)
-        if q_mask is not None:
-            max_sim = max_sim * q_mask.unsqueeze(1)    # broadcast over docs
-        scores = max_sim.sum(dim=-1)                   # (Bq, Bd)
-        return scores
 
     def forward(
         self,
-        # Document (image) inputs
-        doc_pixel_values: Optional[torch.Tensor] = None,
-        pixel_values: Optional[torch.Tensor] = None,  # alias for convenience
-        # Query (text) inputs
-        query_input_ids: Optional[torch.Tensor] = None,
-        query_attention_mask: Optional[torch.Tensor] = None,
-        input_ids: Optional[torch.Tensor] = None,     # alias
-        attention_mask: Optional[torch.Tensor] = None, # alias
-        # Training options
-        compute_loss: bool = False,
-        temperature: float = 0.02,
+        *,
+        # text
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        # images
+        pixel_values: Optional[torch.Tensor] = None,
         **kwargs,
-    ) -> ColInternOutput:
-        """Two modes:
-        1) Embedding mode: pass only `doc_pixel_values` OR only `query_input_ids` -> returns embeddings.
-        2) Training mode: pass both `doc_pixel_values` and `query_input_ids` -> returns late-interaction CE loss.
+    ) -> torch.Tensor:
         """
-        # Map aliases if provided
-        if pixel_values is not None and doc_pixel_values is None:
-            doc_pixel_values = pixel_values
-        if input_ids is not None and query_input_ids is None:
-            query_input_ids = input_ids
-            query_attention_mask = attention_mask
+        Two mutually-exclusive modes:
+          • Text-only  -> pass (input_ids, attention_mask) and no pixel_values
+          • Image-only -> pass (pixel_values) and no input_ids
 
-        has_docs = doc_pixel_values is not None
-        has_queries = query_input_ids is not None
+        Returns:
+          torch.Tensor shaped (B, L_tokens_or_patches, 128)
+        """
+        has_text = input_ids is not None
+        has_img = pixel_values is not None
 
-        if not has_docs and not has_queries:
-            raise ValueError("ColIntern3_5.forward() expects either documents, queries, or both.")
+        if has_text and has_img:
+            raise ValueError("ColIntern3_5.forward accepts either text or images, not both simultaneously.")
+        if not has_text and not has_img:
+            raise ValueError("Provide either (input_ids, attention_mask) or pixel_values.")
 
-        doc_embeds: Optional[torch.Tensor] = None
-        query_embeds: Optional[torch.Tensor] = None
+        if has_img:
+            return self._encode_images(pixel_values=pixel_values)
 
-        if has_docs:
-            doc_embeds = self._encode_images(doc_pixel_values.to(dtype=self.dtype, device=self.device))
+        if attention_mask is None:
+            raise ValueError("attention_mask must be provided with input_ids.")
+        return self._encode_text(input_ids=input_ids, attention_mask=attention_mask)
 
-        if has_queries:
-            if query_attention_mask is None:
-                raise ValueError("query_attention_mask must be provided when encoding queries.")
-            query_input_ids = query_input_ids.to(device=self.device)
-            query_attention_mask = query_attention_mask.to(device=self.device)
-            query_embeds = self._encode_queries(query_input_ids, query_attention_mask)
+    # -------------
+    # HF passthrough
+    # -------------
+    def get_input_embeddings(self):
+        return self.model.language_model.get_input_embeddings()
 
-        # If only one modality is requested, return the raw embeddings tensor
-        if has_docs and not has_queries:
-            # (B, N_patches, D)
-            return doc_embeds  # type: ignore[return-value]
-        if has_queries and not has_docs:
-            # (B, M_tokens, D)
-            return query_embeds  # type: ignore[return-value]
+    def set_input_embeddings(self, value):
+        self.model.language_model.set_input_embeddings(value)
 
-        loss = None
-        if has_docs and has_queries:
-            # In-batch negatives: compute B x B similarity matrix and CE against diagonal
-            scores = self._late_interaction_scores(query_embeds, doc_embeds, q_mask=query_attention_mask)
-            if temperature is not None and temperature > 0:
-                scores = scores / temperature
-            labels = torch.arange(scores.size(0), device=scores.device)
-            loss = nn.functional.cross_entropy(scores, labels)
+    def get_output_embeddings(self):
+        return self.model.language_model.get_output_embeddings()
 
-        return ColInternOutput(loss=loss, query_embeddings=query_embeds, doc_embeddings=doc_embeds)
+    def set_output_embeddings(self, new_embeddings):
+        self.model.language_model.set_output_embeddings(new_embeddings)
 
-    # Convenience properties (useful for processors / downstream code)
+    def set_decoder(self, decoder):
+        self.model.language_model.set_decoder(decoder)
+
+    def get_decoder(self):
+        return self.model.language_model.get_decoder()
+
+    def tie_weights(self):
+        return self.model.language_model.tie_weights()
+
+    def resize_token_embeddings(self, new_num_tokens: Optional[int] = None, pad_to_multiple_of=None) -> nn.Embedding:
+        model_embeds = self.model.language_model.resize_token_embeddings(new_num_tokens, pad_to_multiple_of)
+        # keep config in sync
+        self.config.text_config.vocab_size = model_embeds.num_embeddings
+        self.config.vocab_size = model_embeds.num_embeddings
+        self.model.vocab_size = model_embeds.num_embeddings
+        return model_embeds
+
     @property
     def patch_size(self) -> int:
-        return int(self.config.vision_config.patch_size[0]) if isinstance(self.config.vision_config.patch_size, (list, tuple)) else int(self.config.vision_config.patch_size)
+        ps = self.model.vision_tower.config.patch_size
+        return int(ps[0]) if isinstance(ps, (list, tuple)) else int(ps)
