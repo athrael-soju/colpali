@@ -93,7 +93,7 @@ def main():
     BENCHMARKS = ["ViDoRe(v1)", "ViDoRe(v2)"]
 
     MAX_VIS_TOKENS = int(os.getenv("MAX_VIS_TOKENS", "768"))
-    BATCH_SIZE = int(os.getenv("BATCH_SIZE", "1"))
+    BATCH_SIZE = int(os.getenv("BATCH_SIZE", "64"))
     NUM_WORKERS = 0  # hard zero (we also monkey-patch globally)
 
     if torch.cuda.is_available():
@@ -114,7 +114,7 @@ def main():
         name=f"local/colintern1b:{MODEL_NAME.split('/')[-1]}",
         languages=["eng-Latn"],
         revision="local",
-        release_date=date(2025, 9, 3),
+        release_date=date(2025, 9, 4),
         modalities=["image", "text"],
         n_parameters=1_000_000_000,
         memory_usage_mb=4700,
@@ -152,20 +152,10 @@ def main():
     print("Model loaded successfully!")
     print("mteb version:", getattr(mteb, "__version__", "unknown"))
 
-    benches = mteb.get_benchmarks(names=BENCHMARKS)
-    for bench in benches:
-        bench_name = getattr(bench, "name", type(bench).__name__)
-        print(f"\n=== Benchmark: {bench_name} ===")
-        for task in tasks_from_benchmark(bench):
-            tname = getattr(task, "task_name", getattr(task, "name", type(task).__name__))
-            print(" -> Task:", tname)
-            try:
-                mteb.MTEB(tasks=[task]).run(custom_model)
-                print("    OK")
-            except Exception as e:
-                print("    FAILED:", type(e).__name__, e)
-                traceback.print_exc(limit=2)
-                raise
+    tasks = mteb.get_benchmarks(names=BENCHMARKS)
+    evaluator = mteb.MTEB(tasks=tasks)
+    results = evaluator.run(custom_model)
+    print(results)
 
 
 if __name__ == "__main__":
