@@ -11,12 +11,7 @@ from typing import Optional, Tuple, Union
 import torch
 from torch import nn
 
-from transformers.models.internvl.modeling_internvl import (  # type: ignore
-    InternVLModel,
-    InternVLConfig,
-    InternVLVisionModel,
-    InternVLPreTrainedModel,
-)
+from transformers.models.internvl import InternVLVisionConfig, InternVLModel
 
 from transformers.utils import ModelOutput
 
@@ -56,14 +51,14 @@ class ColIntern3_5(InternVLModel):  # noqa: N801
       `.from_pretrained(...)`.
     """
 
-    # allow loading checkpoints saved under InternVLForConditionalGeneration (keys prefixed by 'model.')
-    _checkpoint_conversion_mapping = {
-        r"^model\.vision_tower": "vision_tower",
-        r"^model\.multi_modal_projector": "multi_modal_projector",
-        r"^model\.language_model": "language_model",
-    }
-
     main_input_name = "doc_pixel_values"  # used by HF Trainer when batching documents
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        key_mapping = kwargs.pop("key_mapping", None)
+        if key_mapping is None:
+            key_mapping = super()._checkpoint_conversion_mapping
+        return super().from_pretrained(*args, **kwargs, key_mapping=key_mapping)
 
     def __init__(self, config: InternVLConfig, output_dim: int = 128, mask_non_image_embeddings: bool = False):
         super().__init__(config)
@@ -91,6 +86,7 @@ class ColIntern3_5(InternVLModel):  # noqa: N801
             doc_embeddings: (B, N_patches, 128) L2-normalized
         """
         self.eval()
+        pixel_values = pixel_values.to(dtype=self.dtype, device=self.device)
         return self._encode_images(pixel_values)
 
     @torch.no_grad()

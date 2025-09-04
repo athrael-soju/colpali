@@ -80,7 +80,7 @@ def print_gpu_info(prefix: str = ""):
 
 def main():
     # === Configuration ===
-    DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
+    DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     MODEL_NAME = "./outputs/colintern3_5-run1"
     BENCHMARKS = ["ViDoRe(v1)", "ViDoRe(v2)"]
 

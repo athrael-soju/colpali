@@ -8,7 +8,7 @@ from typing import ClassVar, List, Optional, Tuple, Union
 import torch
 from PIL import Image
 
-from transformers.models.internvl.processing_internvl import InternVLProcessor  # type: ignore
+from transformers.models.internvl import InternVLProcessor  # type: ignore
 from transformers import BatchEncoding, BatchFeature
 from colpali_engine.utils.processing_utils import BaseVisualRetrieverProcessor
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
@@ -24,19 +24,23 @@ class ColIntern3_5_Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  
       * score_multi_vector(qs, ps) for ColBERT-style late interaction (MaxSim) scoring
     """
 
-    # Not used for encoding, but kept for API symmetry with ColQwen processors
-    visual_prompt_prefix: ClassVar[str] = ""
-    # Provide defaults to match BaseVisualRetrieverProcessor expectations.
+    visual_prompt_prefix: ClassVar[str] = "<image><bos>Describe the image."
     query_prefix: ClassVar[str] = "Query: "
+
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
 
     @property
     def query_augmentation_token(self) -> str:
         """
-        Token used to pad/augment queries for reasoning buffer (similar to ColPali).
-        Defaults to tokenizer.pad_token when available.
+        Return the query augmentation token.
+        Query augmentation buffers are used as reasoning buffers during inference.
         """
-        tok = getattr(self, "tokenizer", None)
-        return getattr(tok, "pad_token", "") if tok is not None else ""
+        return self.tokenizer.pad_token
 
     @classmethod
     def from_pretrained(
@@ -98,7 +102,7 @@ class ColIntern3_5_Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  
         size (height, width) with the given patch size.
 
         The `spatial_merge_size` is the number of patches that will be merged spatially. It is stored in
-        as a `Qwen2VLForConditionalGeneration` attribute under `model.spatial_merge_size`.
+        as a `InternVLForConditionalGeneration` attribute under `model.spatial_merge_size`.
         """
         patch_size = self.image_processor.patch_size
 
