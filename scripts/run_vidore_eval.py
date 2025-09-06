@@ -25,7 +25,7 @@ def main():
     parser.add_argument(
         "--checkpoint-path",
         type=str,
-        default="experiments/colintern3_5-1B-lora/checkpoint-1847",
+        default="runs/8",
         help="Path to the ColIntern3.5 checkpoint"
     )
     parser.add_argument(
@@ -37,13 +37,13 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="results/vidore_evaluation",
+        default="evals/8",
         help="Directory to save results"
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=16,
+        default=8,
         help="Batch size for evaluation"
     )
     

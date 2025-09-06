@@ -46,6 +46,7 @@ class ColIntern3_5Wrapper(ColPaliEngineWrapper):
                 base_model_name,
                 device_map=self.device,
                 torch_dtype=torch_dtype,
+                mask_non_image_embeddings=True,  # Enable masking for inference
                 **kwargs,
             )
             
@@ -68,6 +69,7 @@ class ColIntern3_5Wrapper(ColPaliEngineWrapper):
                 device_map=self.device,
                 torch_dtype=torch_dtype,
                 adapter_kwargs={"revision": revision} if revision else {},
+                mask_non_image_embeddings=True,  # Enable masking for inference
                 **kwargs,
             )
         self.mdl.eval()

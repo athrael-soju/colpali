@@ -71,18 +71,20 @@ if __name__ == "__main__":
 
         # ---- InternVL3_5 backbone + processor ----
         # NOTE: InternVL3.5 uses 256 tokens per patch after pixel shuffle compression.
-        # Default: 12 patches × 256 = 3072 tokens. We use 1536 (6 patches) for memory efficiency.
+        # Following ColQwen's proven approach: 768 patches for optimal performance/efficiency balance.
+        # ColQwen achieves SOTA with 768 patches on 2B model → perfect for 1B model efficiency.
     config = ColModelTrainingConfig(
         output_dir=args.output_dir,
         processor=ColIntern3_5Processor.from_pretrained(
             pretrained_model_name_or_path="OpenGVLab/InternVL3_5-1B-HF",
-            max_num_visual_tokens=1536,  # 6 patches × 256 tokens = 1536 (memory efficient)
+            max_num_visual_tokens=768,  # 3 patches × 256 tokens = 768 (ColQwen's proven optimum)
         ),
         model=ColIntern3_5.from_pretrained(
             pretrained_model_name_or_path="OpenGVLab/InternVL3_5-1B-HF",
             torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",  # InternVL supports flash-attn:contentReference[oaicite:9]{index=9}
-            trust_remote_code=True,                  # recommended for InternVL HF impl & weights:contentReference[oaicite:10]{index=10}
+            attn_implementation="flash_attention_2",  # InternVL supports flash-attn
+            trust_remote_code=True,                  # recommended for InternVL HF impl & weights
+            mask_non_image_embeddings=True,          # CRITICAL FIX: Enable masking for proper training
         ),
 
         # ---- Datasets identical to your flow ----
@@ -97,7 +99,7 @@ if __name__ == "__main__":
         tr_args=TrainingArguments(
             output_dir=None,
             overwrite_output_dir=True,
-            num_train_epochs=5,  # CRITICAL: Must be 5 for proper convergence
+            num_train_epochs=5,  # CRITICAL: 5 epochs for proper convergence and ViDoRe competition
             per_device_train_batch_size=16,  # Optimal for RTX 5090 32GB
             gradient_accumulation_steps=4,   # Effective batch size = 64
             gradient_checkpointing=True,
