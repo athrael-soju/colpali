@@ -22,67 +22,81 @@ class ColIntern3_5Wrapper(ColPaliEngineWrapper):
 
     def __init__(
         self,
-        model_name: str = "experiments/colintern3_5-1B-lora",
+        model_name: str = "output/checkpoint-1847",  # Default to our trained checkpoint
         revision: str | None = None,
         device: str | None = None,
-        torch_dtype: torch.dtype = torch.bfloat16,  # Change default to bfloat16
+        torch_dtype: torch.dtype = torch.bfloat16,
         **kwargs,
     ):
         requires_package(
             self, "colpali_engine", model_name, "pip install mteb[colpali_engine]"
         )
         from colpali_engine.models import ColIntern3_5, ColIntern3_5Processor
+        from peft import PeftModel
+        import os
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Load model from the specified path
-        # For PEFT checkpoints, we need to load the base model first and then the adapter
-        if model_name.startswith("experiments/"):
-            # This is a local PEFT checkpoint
-            base_model_name = "OpenGVLab/InternVL3_5-1B-HF"
-            
-            # First load the base model without PEFT
-            self.mdl = ColIntern3_5.from_pretrained(
-                base_model_name,
-                device_map=self.device,
-                torch_dtype=torch_dtype,
-                mask_non_image_embeddings=True,  # Enable masking for inference
-                **kwargs,
-            )
-            
-            # Then load the PEFT adapter using the proper approach
-            from peft import PeftModel
-            self.mdl = PeftModel.from_pretrained(
-                self.mdl, 
-                model_name,
-                torch_dtype=torch_dtype,
-                is_trainable=False  # Set to False for inference
-            )
-            
-            # Merge the adapter weights into the base model for inference
-            # This ensures the custom_text_proj gets the trained weights
-            self.mdl = self.mdl.merge_and_unload()
-        else:
-            # Regular model loading
-            self.mdl = ColIntern3_5.from_pretrained(
-                model_name,
-                device_map=self.device,
-                torch_dtype=torch_dtype,
-                adapter_kwargs={"revision": revision} if revision else {},
-                mask_non_image_embeddings=True,  # Enable masking for inference
-                **kwargs,
-            )
+        # Validate that this is a trained checkpoint path
+        if not os.path.exists(model_name):
+            raise ValueError(f"Model path does not exist: {model_name}")
+        
+        # Check for required PEFT files
+        adapter_config_path = os.path.join(model_name, "adapter_config.json")
+        adapter_model_path = os.path.join(model_name, "adapter_model.safetensors")
+        
+        if not os.path.exists(adapter_config_path):
+            raise ValueError(f"adapter_config.json not found in {model_name}. This must be a trained PEFT checkpoint.")
+        if not os.path.exists(adapter_model_path):
+            raise ValueError(f"adapter_model.safetensors not found in {model_name}. This must be a trained PEFT checkpoint.")
+        
+        logger.info(f"Loading trained ColIntern3.5 checkpoint from: {model_name}")
+        
+        # Always load as PEFT checkpoint - no fallbacks to base model
+        base_model_name = "OpenGVLab/InternVL3_5-1B-HF"
+        
+        # Load the base model
+        logger.info(f"Loading base model: {base_model_name}")
+        self.mdl = ColIntern3_5.from_pretrained(
+            base_model_name,
+            device_map=self.device,
+            torch_dtype=torch_dtype,
+            mask_non_image_embeddings=True,
+            **kwargs,
+        )
+        
+        # Load the trained PEFT adapter
+        logger.info(f"Loading trained adapter from: {model_name}")
+        self.mdl = PeftModel.from_pretrained(
+            self.mdl, 
+            model_name,
+            torch_dtype=torch_dtype,
+            is_trainable=False
+        )
+        
+        # Merge the adapter weights into the base model
+        logger.info("Merging trained adapter weights...")
+        self.mdl = self.mdl.merge_and_unload()
+        
         self.mdl.eval()
         
-        # For local checkpoints, use the base model for the processor
-        base_model_name = "OpenGVLab/InternVL3_5-1B-HF"
-        processor_model_name = base_model_name if model_name.startswith("experiments/") else model_name
+        # Validate that we have the trained model by checking custom_text_proj
+        if hasattr(self.mdl, 'custom_text_proj'):
+            logger.info("✅ Successfully loaded trained model with custom_text_proj")
+        else:
+            raise RuntimeError("Failed to load trained model - custom_text_proj not found!")
         
         # Load processor from base model
-        self.processor = ColIntern3_5Processor.from_pretrained(processor_model_name)
+        logger.info(f"Loading processor from base model: {base_model_name}")
+        self.processor = ColIntern3_5Processor.from_pretrained(
+            base_model_name,
+            max_num_visual_tokens=768
+        )
         
         # Initialize processor kwargs (inherited from ColPaliEngineWrapper)
         self.processor_kwargs = {}
+        
+        logger.info(f"Model loaded successfully on device: {self.device}")
 
     def encode(self, sentences, **kwargs):
         return self.get_text_embeddings(texts=sentences, **kwargs)
@@ -104,7 +118,7 @@ COLINTERN3_5_TRAINING_DATA = {
 colintern3_5_1b_lora = ModelMeta(
     loader=partial(
         ColIntern3_5Wrapper,
-        model_name="experiments/colintern3_5-1B-lora/checkpoint-1847",                                                    
+        model_name="output/checkpoint-1847",                                                    
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2"
         if is_flash_attn_2_available()

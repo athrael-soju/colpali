@@ -31,8 +31,8 @@ def main():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="experiments/colintern3_5-test/checkpoint-1847",
-        help="Path to the ColIntern3.5 model checkpoint"
+        default="output/checkpoint-1847",  # Default to our trained checkpoint
+        help="Path to the ColIntern3.5 trained checkpoint (must be a PEFT checkpoint)"
     )
     parser.add_argument(
         "--batch-size",
@@ -49,7 +49,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="results/mteb_evaluation",
+        default="evals/colintern3_5-1847",
         help="Directory to save evaluation results"
     )
     parser.add_argument(
@@ -64,19 +64,32 @@ def main():
     # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Check if model path exists
+    # Validate that model path exists and is a trained checkpoint
     if not os.path.exists(args.model_path):
         logger.error(f"Model path {args.model_path} does not exist!")
         sys.exit(1)
     
-    logger.info(f"Evaluating ColIntern3.5 model from: {args.model_path}")
-    logger.info(f"Benchmarks: {args.benchmarks}")
-    logger.info(f"Batch size: {args.batch_size}")
-    logger.info(f"Output directory: {args.output_dir}")
+    # Validate that this is actually a PEFT checkpoint
+    adapter_config_path = os.path.join(args.model_path, "adapter_config.json")
+    adapter_model_path = os.path.join(args.model_path, "adapter_model.safetensors")
     
-    # Create custom model metadata for the specific checkpoint
+    if not os.path.exists(adapter_config_path):
+        logger.error(f"adapter_config.json not found in {args.model_path}. This must be a trained PEFT checkpoint!")
+        sys.exit(1)
+    if not os.path.exists(adapter_model_path):
+        logger.error(f"adapter_model.safetensors not found in {args.model_path}. This must be a trained PEFT checkpoint!")
+        sys.exit(1)
+    
+    logger.info(f"✅ Validated trained checkpoint at: {args.model_path}")
+    
+    logger.info(f"🚀 Evaluating TRAINED ColIntern3.5 model from: {args.model_path}")
+    logger.info(f"📊 Benchmarks: {args.benchmarks}")
+    logger.info(f"⚙️  Batch size: {args.batch_size}")
+    logger.info(f"💾 Output directory: {args.output_dir}")
+    
+    # Create custom model metadata for the specific trained checkpoint
     checkpoint_name = Path(args.model_path).name
-    model_name = f"athrael-soju/colintern3_5-{checkpoint_name}"
+    model_name = f"athrael-soju/colintern3_5-{checkpoint_name}-trained"
     
     custom_model_meta = ModelMeta(
         loader=lambda name=None: ColIntern3_5Wrapper(
@@ -110,12 +123,20 @@ def main():
     )
     
     # Load the model
-    logger.info("🔄 Loading model...")
+    logger.info("🔄 Loading TRAINED model...")
     try:
         model = custom_model_meta.load_model()
-        logger.info("✅ Model loaded successfully!")
+        logger.info("✅ TRAINED model loaded successfully!")
+        
+        # Additional validation that we loaded the trained model
+        if hasattr(model, 'mdl') and hasattr(model.mdl, 'custom_text_proj'):
+            logger.info("✅ Confirmed: Model has custom_text_proj (trained weights loaded)")
+        else:
+            logger.error("❌ Error: Model does not have custom_text_proj - this suggests base model was loaded instead of trained!")
+            sys.exit(1)
+            
     except Exception as e:
-        logger.error(f"Failed to load model: {e}")
+        logger.error(f"Failed to load trained model: {e}")
         sys.exit(1)
     
     # Load tasks
@@ -130,7 +151,7 @@ def main():
     # Create evaluator
     evaluator = mteb.MTEB(tasks=tasks)
     
-    # Run evaluation
+    # Run evaluation with overwrite to force re-evaluation of the new model
     logger.info("Starting evaluation...")
     try:
         results = evaluator.run(
@@ -138,8 +159,10 @@ def main():
             output_folder=args.output_dir,
             batch_size=args.batch_size,
             verbosity=2,
+            overwrite_results=True,  # Force re-evaluation instead of using cached results
         )
         
+
         logger.info("Evaluation completed successfully!")
         logger.info(f"Results saved to: {args.output_dir}")
         
@@ -149,12 +172,22 @@ def main():
             logger.info("EVALUATION SUMMARY")
             logger.info("="*50)
             
-            for task_name, task_results in results.items():
-                if isinstance(task_results, dict) and 'main_score' in task_results:
-                    score = task_results['main_score']
-                    logger.info(f"{task_name}: {score:.3f}")
-                else:
-                    logger.info(f"{task_name}: {task_results}")
+            # Handle both dict and list result formats
+            if isinstance(results, dict):
+                for task_name, task_results in results.items():
+                    if isinstance(task_results, dict) and 'main_score' in task_results:
+                        score = task_results['main_score']
+                        logger.info(f"{task_name}: {score:.3f}")
+                    else:
+                        logger.info(f"{task_name}: {task_results}")
+            elif isinstance(results, list):
+                for task_result in results:
+                    if isinstance(task_result, dict):
+                        task_name = task_result.get('task_name', 'Unknown')
+                        main_score = task_result.get('main_score', 'N/A')
+                        logger.info(f"{task_name}: {main_score}")
+                    else:
+                        logger.info(f"Result: {task_result}")
             
             logger.info("="*50)
     
