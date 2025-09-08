@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 def check_environment():
     """Check if the environment is ready for training."""
-    logger.info("Checking environment...")
+    logger.info("Checking environment...")    
     
     # Check GPU
     if not torch.cuda.is_available():
@@ -63,12 +63,6 @@ def check_environment():
         logger.info(f"Flash Attention available: {flash_attn.__version__}")
     except ImportError:
         logger.warning("Flash Attention not available. Consider installing for better performance.")
-    
-    # Setup CUDA optimizations
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.benchmark = True
-    
     return True
 
 def parse_args():
@@ -107,7 +101,7 @@ def parse_args():
     parser.add_argument(
         "--num-epochs", 
         type=int, 
-        default=5,
+        default=1,
         help="Number of training epochs"
     )
     parser.add_argument(
@@ -168,7 +162,6 @@ def parse_args():
 
 def create_config(args):
     """Create training configuration."""
-    
     # Setup processor
     processor = ColIntern3_5Processor.from_pretrained(
         args.model_path,
@@ -211,8 +204,8 @@ def create_config(args):
         gradient_checkpointing_kwargs={"use_reentrant": False},
         per_device_eval_batch_size=max(1, args.batch_size // 2),
         eval_strategy="steps",
-        dataloader_num_workers=4,
-        dataloader_prefetch_factor=2,
+        dataloader_num_workers=0,  # Disable multiprocessing on WSL
+        dataloader_prefetch_factor=1,
         save_steps=500 if not args.debug else 50,
         logging_steps=10,
         eval_steps=100 if not args.debug else 25,
@@ -221,7 +214,7 @@ def create_config(args):
         learning_rate=args.learning_rate,
         save_total_limit=2,
         bf16=True,
-        dataloader_pin_memory=True,
+        dataloader_pin_memory=False,
         optim="adamw_torch_fused",
         remove_unused_columns=False,
         tf32=True,

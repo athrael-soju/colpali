@@ -12,7 +12,7 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):
     Processor for ColIntern3_5.
     """
 
-    visual_prompt_prefix: ClassVar[str] = "<IMG_CONTEXT>\nDescribe the image."
+    visual_prompt_prefix: ClassVar[str] = "Describe the image."
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -54,8 +54,8 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):
         """
         images = [image.convert("RGB") for image in images]
 
-        # For InternVL, we need to include the proper image token in the text
-        # The image token is <IMG_CONTEXT> which gets replaced with actual image tokens during processing
+        # For InternVL, we need to include the image token that gets replaced with actual image embeddings
+        # The pattern should be: <IMG_CONTEXT> + visual_prompt_prefix
         texts = [f"{self.image_token}\n{self.visual_prompt_prefix}" for _ in images]
         
         batch_doc = self(
