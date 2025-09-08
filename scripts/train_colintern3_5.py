@@ -89,37 +89,37 @@ def parse_args():
     parser.add_argument(
         "--batch-size", 
         type=int, 
-        default=8,
+        default=64,
         help="Per-device training batch size"
     )
     parser.add_argument(
         "--gradient-accumulation-steps", 
         type=int, 
-        default=16,
+        default=4,
         help="Gradient accumulation steps"
     )
     parser.add_argument(
         "--learning-rate", 
         type=float, 
-        default=3e-5,
+        default=2e-4,
         help="Learning rate"
     )
     parser.add_argument(
         "--num-epochs", 
         type=int, 
-        default=3,
+        default=5,
         help="Number of training epochs"
     )
     parser.add_argument(
         "--lora-r", 
         type=int, 
-        default=64,
+        default=32,
         help="LoRA rank"
     )
     parser.add_argument(
         "--lora-alpha", 
         type=int, 
-        default=128,
+        default=32,
         help="LoRA alpha"
     )
     parser.add_argument(
@@ -131,7 +131,7 @@ def parse_args():
     parser.add_argument(
         "--loss-type", 
         type=str, 
-        default="pairwise",
+        default="colbert",
         choices=["pairwise", "colbert"],
         help="Type of loss function to use"
     )
@@ -151,6 +151,12 @@ def parse_args():
         "--no-wandb", 
         action="store_true",
         help="Disable Weights & Biases logging"
+    )
+    parser.add_argument(
+        "--max-patches", 
+        type=int, 
+        default=12,
+        help="Maximum number of image patches (InternVL specific, replaces max_num_visual_tokens)"
     )
     parser.add_argument(
         "--debug", 
@@ -205,13 +211,13 @@ def create_config(args):
         gradient_checkpointing_kwargs={"use_reentrant": False},
         per_device_eval_batch_size=max(1, args.batch_size // 2),
         eval_strategy="steps",
-        dataloader_num_workers=8,
+        dataloader_num_workers=4,
         dataloader_prefetch_factor=2,
-        save_steps=250 if not args.debug else 50,
+        save_steps=500 if not args.debug else 50,
         logging_steps=10,
-        eval_steps=125 if not args.debug else 25,
-        warmup_ratio=0.03,
-        lr_scheduler_type="cosine",
+        eval_steps=100 if not args.debug else 25,
+        warmup_steps=500,
+        lr_scheduler_type="linear",
         learning_rate=args.learning_rate,
         save_total_limit=2,
         bf16=True,
@@ -230,20 +236,11 @@ def create_config(args):
     peft_config = LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
-        lora_dropout=0.05,
+        lora_dropout=0.1,
         init_lora_weights="gaussian",
         bias="none",
         task_type="FEATURE_EXTRACTION",
-        target_modules=[
-            "model.language_model.layers.*.self_attn.q_proj",
-            "model.language_model.layers.*.self_attn.k_proj", 
-            "model.language_model.layers.*.self_attn.v_proj",
-            "model.language_model.layers.*.self_attn.o_proj",
-            "model.language_model.layers.*.mlp.gate_proj",
-            "model.language_model.layers.*.mlp.up_proj",
-            "model.language_model.layers.*.mlp.down_proj",
-            "custom_text_proj",
-        ],
+        target_modules="(.*(model)(?!.*visual).*(down_proj|gate_proj|up_proj|k_proj|q_proj|v_proj|o_proj).*$|.*(custom_text_proj).*$)",
     )
     
     # Create training configuration

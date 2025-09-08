@@ -17,6 +17,23 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    @classmethod
+    def from_pretrained(
+        cls,
+        *args,
+        **kwargs,
+    ):
+        # InternVL3.5 specific configurations
+        # Remove max_num_visual_tokens if passed (not applicable to InternVL)
+        if "max_num_visual_tokens" in kwargs:
+            kwargs.pop("max_num_visual_tokens")
+            
+        instance = super().from_pretrained(*args, **kwargs)
+        
+        # InternVL3.5 uses fixed image_seq_length=256 and max_patches configuration
+        # These are handled by the base InternVLProcessor
+        return instance
+
     @property
     def query_augmentation_token(self) -> str:
         """
@@ -37,8 +54,9 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):
         """
         images = [image.convert("RGB") for image in images]
 
-        # For each image, create a text prompt with exactly one <image> token
-        texts = [self.visual_prompt_prefix for _ in images]
+        # For InternVL, we need to include the proper image token in the text
+        # The image token is <IMG_CONTEXT> which gets replaced with actual image tokens during processing
+        texts = [f"{self.image_token}\n{self.visual_prompt_prefix}" for _ in images]
         
         batch_doc = self(
             text=texts,
@@ -90,4 +108,10 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):
         return n_patches_per_side, n_patches_per_side
 
     def get_image_mask(self, batch_images: BatchFeature) -> torch.Tensor:
-        return batch_images.input_ids == self.image_token_id
+        # Use the correct image token ID from InternVL tokenizer
+        # The image_token_id should be 151671 for <IMG_CONTEXT>
+        image_token_id = getattr(self, 'image_token_id', None)
+        if image_token_id is None:
+            # Fallback to tokenizer's context image token ID
+            image_token_id = getattr(self.tokenizer, 'context_image_token_id', 151671)
+        return batch_images.input_ids == image_token_id
