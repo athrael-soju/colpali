@@ -83,13 +83,13 @@ def parse_args():
     parser.add_argument(
         "--batch-size", 
         type=int, 
-        default=64,
+        default=32,
         help="Per-device training batch size"
     )
     parser.add_argument(
         "--gradient-accumulation-steps", 
         type=int, 
-        default=4,
+        default=8,
         help="Gradient accumulation steps"
     )
     parser.add_argument(
@@ -162,6 +162,7 @@ def parse_args():
 
 def create_config(args):
     """Create training configuration."""
+    
     # Setup processor
     processor = ColIntern3_5Processor.from_pretrained(
         args.model_path,
@@ -175,6 +176,7 @@ def create_config(args):
         attn_implementation="flash_attention_2",
         trust_remote_code=True
     )
+    
     
     # Setup datasets - using HuggingFace dataset format like ColQwen 2.5
     train_dataset = load_train_set()
@@ -205,7 +207,7 @@ def create_config(args):
         per_device_eval_batch_size=max(1, args.batch_size // 2),
         eval_strategy="steps",
         dataloader_num_workers=0,  # Disable multiprocessing on WSL
-        dataloader_prefetch_factor=1,
+        # dataloader_prefetch_factor=1,
         save_steps=500 if not args.debug else 50,
         logging_steps=10,
         eval_steps=100 if not args.debug else 25,
