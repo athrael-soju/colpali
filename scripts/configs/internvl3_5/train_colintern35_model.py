@@ -77,7 +77,7 @@ def get_target_modules_by_regex(model):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--output-dir", type=str, default="./runs/9", help="where to write model + script copy")
+    p.add_argument("--output-dir", type=str, default="./runs/2", help="where to write model + script copy")
     p.add_argument("--lr", type=float, default=5e-5, help="learning rate")
     p.add_argument("--tau", type=float, default=0.02, help="temperature for loss function")
     p.add_argument("--trainer", type=str, default="hf", choices=["torch", "hf"], help="trainer to use")
@@ -180,4 +180,4 @@ if __name__ == "__main__":
 
     trainer = ColModelTraining(config) if args.trainer == "hf" else ColModelTorchTraining(config)
     trainer.train()
-    trainer.save()
+    trainer.save()1
