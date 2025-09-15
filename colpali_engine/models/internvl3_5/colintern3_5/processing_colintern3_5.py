@@ -52,10 +52,7 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
 
     @property
     def query_augmentation_token(self) -> str:
-        """
-        Return the query augmentation token.
-        Query augmentation buffers are used as reasoning buffers during inference.
-        """
+        """Return the query augmentation token."""
         return self.tokenizer.pad_token
 
     @classmethod
@@ -68,9 +65,7 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
         return super().from_pretrained(*args, device_map=device_map, **kwargs)
 
     def process_images(self, images: List[Image.Image]) -> BatchEncoding:
-        """
-        Process images for the model using the InternVL processor.
-        """
+        """Process images for the model using the InternVL processor."""
         images = [image.convert("RGB") for image in images]
         placeholder = self.visual_prompt_prefix
         batch = self(
@@ -84,9 +79,7 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
         return batch
 
     def process_texts(self, texts: List[str]) -> Union[BatchFeature, BatchEncoding]:
-        """
-        Process a batch of text queries for input to ColIntern3.5.
-        """
+        """Process a batch of text queries for input to ColIntern3.5."""
         return self(text=texts, return_tensors="pt", padding="longest")
 
     # Alias
@@ -100,23 +93,15 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
         device: Optional[Union[str, torch.device]] = None,
         **kwargs,
     ) -> torch.Tensor:
-        """
-        Compute the MaxSim score (ColBERT-like) for the given multi-vector query and passage embeddings.
-        """
+        """Compute the MaxSim score (ColBERT-like) for the given multi-vector query and passage embeddings."""
         return self.score_multi_vector(qs, ps, device=device, **kwargs)
 
-    def score_multi_vector(self, qs: Union[List[torch.Tensor], torch.Tensor], ps: Union[List[torch.Tensor], torch.Tensor], device: Optional[Union[str, torch.device]] = None) -> torch.Tensor:
-        """
-        Compute ColBERT-style MaxSim score between multi-vector queries and passages.
-        Each query embedding and passage embedding can be a list of token embeddings (or a tensor of shape [seq_length, dim]).
-        Returns a tensor of scores with shape (len(qs), len(ps)).
-        """
+    def score_multi_vector(self, qs, ps, device: Optional[Union[str, torch.device]] = None) -> torch.Tensor:
+        """Compute ColBERT-style MaxSim score (delegates to BaseVisualRetrieverProcessor)."""
         return super().score_multi_vector(qs, ps, device=device)
 
     def get_n_patches(self, image_size: Tuple[int, int], spatial_merge_size: int) -> Tuple[int, int]:
-        """
-        Compute the number of patch tokens (n_patches_x, n_patches_y) for an image of given (height, width) in pixels.
-        """
+        """Compute the number of patch tokens (n_patches_x, n_patches_y) for an image of given (height, width)."""
         patch_size = getattr(self.image_processor, "patch_size", 14)
         if isinstance(patch_size, (list, tuple)):
             patch_size = patch_size[0]
@@ -146,7 +131,5 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
         return (n_patches_x, n_patches_y)
 
     def get_image_mask(self, batch_images: BatchFeature) -> torch.Tensor:
-        """
-        Generate a mask indicating which positions in the input IDs correspond to image patch tokens.
-        """
+        """Generate a mask indicating which positions correspond to image patch tokens."""
         return batch_images["input_ids"] == getattr(self, "image_token_id", self.tokenizer.context_image_token_id)
