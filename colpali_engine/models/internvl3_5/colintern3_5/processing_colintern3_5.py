@@ -1,4 +1,4 @@
-from typing import ClassVar, Dict, List, Optional, Tuple, Union
+from typing import ClassVar, List, Optional, Tuple, Union
 import torch
 from PIL import Image
 from transformers import BatchEncoding, BatchFeature
@@ -9,50 +9,46 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
     """
     Processor for the ColIntern3.5 model.
     Combines an image processor and tokenizer to prepare inputs for ColIntern3.5, following ColPali conventions.
-    
-    Args:
-        *args: Arguments for the InternVLProcessor.
-        **kwargs: Keyword arguments for the InternVLProcessor (e.g., tokenizer or processor initialization parameters).
+
+    Key design:
+      - Right padding for tokenizer
+      - Control visual detail via image size (no arbitrary 'max_patches' cap)
+      - Pixel values cast to bf16
+      - `downsample_ratio` is provided or set later from the model config to avoid brittle fallbacks
     """
-    
-    visual_prompt_prefix: ClassVar[str] = "<IMG_CONTEXT>Describe the image."
+
+    visual_prompt_prefix: ClassVar[str] = "<IMG_CONTEXT> Describe the image."
     query_augmentation_token: ClassVar[str] = "<|endoftext|>"
+
     def __init__(self, *args, **kwargs):
+        # Accept explicit control from trainer/runner
+        self._initial_downsample_ratio = kwargs.pop("downsample_ratio", None)
+        self._initial_max_image_size = kwargs.pop("max_image_size", 448)
         super().__init__(*args, **kwargs)
+
         # Ensure text tokenizer pads on the right
         self.tokenizer.padding_side = "right"
-        
-        # Set image sequence length (number of tokens per patch)
-        self.image_seq_length = getattr(self.tokenizer, 'image_seq_length', 256)
-        
-        # Get the downsample ratio from config to adjust token count
-        # This is crucial for InternVL as vision features are downsampled
-        if hasattr(self, 'image_processor') and hasattr(self.image_processor, 'config'):
-            config = self.image_processor.config
-        else:
-            # Try to get config from the tokenizer or fallback
-            try:
-                from transformers.models.internvl import InternVLConfig
-                config = InternVLConfig.from_pretrained(args[0] if args else 'OpenGVLab/InternVL3_5-1B-HF')
-            except:
-                config = None
-        
-        # Use vision_config for downsample_ratio as per official implementation
-        if config:
-            self.downsample_ratio = getattr(config, 'downsample_ratio', 0.5)
-        else:
-            self.downsample_ratio = 0.5
-        
-        # Set up image token attributes if they exist
+
+        # Downsample ratio: prefer explicit value; otherwise conservative default
+        self.downsample_ratio = self._initial_downsample_ratio if self._initial_downsample_ratio is not None else 0.5
+
+        # Expose image tokens if available
         self.image_token = getattr(self.tokenizer, 'context_image_token', '<IMG_CONTEXT>')
         self.start_image_token = getattr(self.tokenizer, 'start_image_token', '')
         self.end_image_token = getattr(self.tokenizer, 'end_image_token', '')
-        
-        # Store the special image token ID for quick access
         if hasattr(self.tokenizer, "context_image_token_id"):
             self.image_token_id = self.tokenizer.context_image_token_id
         elif hasattr(self.tokenizer, "image_token_id"):
             self.image_token_id = self.tokenizer.image_token_id
+
+        # Standardize image size for document pages; do NOT impose arbitrary patch caps
+        if hasattr(self, "image_processor") and hasattr(self.image_processor, "size"):
+            if isinstance(self.image_processor.size, dict):
+                self.image_processor.size = {"height": self._initial_max_image_size, "width": self._initial_max_image_size}
+            else:
+                self.image_processor.size = self._initial_max_image_size
+        if hasattr(self, "image_processor") and hasattr(self.image_processor, "crop_to_patches"):
+            self.image_processor.crop_to_patches = True
 
     @property
     def query_augmentation_token(self) -> str:
@@ -64,53 +60,27 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
 
     @classmethod
     def from_pretrained(cls, *args, device_map: Optional[str] = None, **kwargs):
-        instance = super().from_pretrained(*args, device_map=device_map, **kwargs)
-        # Optionally limit visual tokens by adjusting image processor's configuration (if provided)
-        if "max_num_visual_tokens" in kwargs:
-            max_tokens = kwargs["max_num_visual_tokens"]
-            # Based on official InternVL: limit tokens while maintaining quality
-            if hasattr(instance.image_processor, "max_patches"):
-                # Allow reasonable number of patches for document understanding
-                # Official InternVL doesn't severely limit max_patches
-                target_patches = min(max_tokens // 256, 12)
-                instance.image_processor.max_patches = target_patches
-                # Use standard InternVL image size as per official implementation
-                if hasattr(instance.image_processor, "size"):
-                    # Use official InternVL image size for better processing
-                    instance.image_processor.size = {"height": 448, "width": 448}
-                # Enable crop_to_patches as per official InternVL implementation
-                if hasattr(instance.image_processor, "crop_to_patches"):
-                    instance.image_processor.crop_to_patches = True
-        return instance
+        """
+        Optional kwargs:
+          - max_image_size: int (e.g., 448). If provided, we resize the longer side to this value.
+          - downsample_ratio: float. If provided, used directly; otherwise trainer should assign from model.config.
+        """
+        return super().from_pretrained(*args, device_map=device_map, **kwargs)
 
     def process_images(self, images: List[Image.Image]) -> BatchEncoding:
         """
         Process images for the model using the InternVL processor.
-        
-        Args:
-            images: List of PIL Images
-            
-        Returns:
-            BatchEncoding with processed tensors
         """
-        # Convert images to RGB if needed
         images = [image.convert("RGB") for image in images]
-        
-        # Use a placeholder text for each image to get proper InternVL processing
         placeholder = self.visual_prompt_prefix
-        
-        # Process images and text together using the parent processor
         batch = self(
-            text=[placeholder] * len(images), 
-            images=images, 
-            padding="longest", 
-            return_tensors="pt"
+            text=[placeholder] * len(images),
+            images=images,
+            padding="longest",
+            return_tensors="pt",
         )
-        
-        # Convert pixel_values to bfloat16 as expected by the model and tests
         if "pixel_values" in batch:
             batch["pixel_values"] = batch["pixel_values"].to(torch.bfloat16)
-        
         return batch
 
     def process_texts(self, texts: List[str]) -> Union[BatchFeature, BatchEncoding]:
@@ -119,7 +89,7 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
         """
         return self(text=texts, return_tensors="pt", padding="longest")
 
-    # Alias for process_texts
+    # Alias
     def process_queries(self, queries: List[str]) -> Union[BatchFeature, BatchEncoding]:
         return self.process_texts(queries)
 
@@ -141,7 +111,6 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
         Each query embedding and passage embedding can be a list of token embeddings (or a tensor of shape [seq_length, dim]).
         Returns a tensor of scores with shape (len(qs), len(ps)).
         """
-        # Use the base class implementation which returns the correct shape
         return super().score_multi_vector(qs, ps, device=device)
 
     def get_n_patches(self, image_size: Tuple[int, int], spatial_merge_size: int) -> Tuple[int, int]:
@@ -153,13 +122,23 @@ class ColIntern3_5Processor(BaseVisualRetrieverProcessor, InternVLProcessor):  #
             patch_size = patch_size[0]
         height, width = image_size
         factor = patch_size * spatial_merge_size
-        # Scale down large images to max 448 on the longer side to limit patch count
-        max_side = 448
+
+        # Respect the processor's intended resize target (longer side)
+        if hasattr(self.image_processor, "size"):
+            target = self.image_processor.size
+            if isinstance(target, dict):
+                max_side = max(target.get("height", 448), target.get("width", 448))
+            else:
+                max_side = int(target)
+        else:
+            max_side = 448
+
         if max(height, width) > max_side:
             scale = max_side / max(height, width)
             height = int(height * scale)
             width = int(width * scale)
-        # Align to the nearest lower multiple of factor (minimum one factor)
+
+        # Align to multiples of factor
         height_new = max(factor, (height // factor) * factor)
         width_new = max(factor, (width // factor) * factor)
         n_patches_y = height_new // patch_size // spatial_merge_size
