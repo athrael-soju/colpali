@@ -73,4 +73,42 @@ class ColIdefics3Processor(BaseVisualRetrieverProcessor, Idefics3Processor):
         image_size: Tuple[int, int],
         patch_size: int,
     ) -> Tuple[int, int]:
-        raise NotImplementedError("This method is not implemented for ColIdefics3.")
+        """
+        Get the number of patches (n_patches_x, n_patches_y) for Idefics3-based models.
+
+        Idefics3 uses a SigLIP vision encoder with variable resolution and image splitting.
+        Images are split into sub-images of size `max_image_size`, which are then divided
+        into patches of size `patch_size`.
+
+        Args:
+            image_size: Original image size (width, height) - not used for Idefics3 as images
+                       are resized to fixed sub-image sizes.
+            patch_size: Size of each patch (typically 16 or 32 for SigLIP-based models).
+
+        Returns:
+            Tuple of (n_patches_x, n_patches_y) representing the number of patches in each dimension.
+        """
+        # For Idefics3, get the sub-image size from the image processor configuration
+        # Images are split into sub-images of this size before being divided into patches
+        if hasattr(self.image_processor, "max_image_size"):
+            # max_image_size defines the size of each sub-image
+            if isinstance(self.image_processor.max_image_size, dict):
+                sub_image_size = self.image_processor.max_image_size.get("longest_edge", 364)
+            else:
+                sub_image_size = self.image_processor.max_image_size
+        elif hasattr(self.image_processor, "size") and isinstance(self.image_processor.size, dict):
+            # Fallback: check if size is defined
+            size_value = self.image_processor.size.get("longest_edge", 364)
+            # If size is the overall longest_edge (e.g., 1456), divide by default factor of 4
+            # to get sub-image size (364). Otherwise use as-is.
+            sub_image_size = size_value if size_value < 1000 else 364
+        else:
+            # Default sub-image size for Idefics3 (364x364)
+            sub_image_size = 364
+
+        # Calculate number of patches in each dimension
+        # For Idefics3, sub-images are square
+        n_patches_x = sub_image_size // patch_size
+        n_patches_y = sub_image_size // patch_size
+
+        return n_patches_x, n_patches_y
