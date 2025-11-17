@@ -139,17 +139,41 @@ class ColModernVBertProcessor(BaseVisualRetrieverProcessor, Idefics3Processor):
         """
         return self.score_multi_vector(qs, ps, device=device, **kwargs)
 
+    def get_image_mask(self, batch_images: BatchFeature) -> torch.Tensor:
+        """
+        Get a tensor mask that identifies the image tokens in the batch.
+
+        Args:
+            batch_images: The batch of processed images.
+
+        Returns:
+            A boolean tensor of shape (batch_size, sequence_length) where True indicates image tokens.
+        """
+        image_token_id = self.tokenizer.convert_tokens_to_ids(self.image_token)
+        return batch_images.input_ids == image_token_id
+
     def get_n_patches(
         self,
         image_size: Tuple[int, int],
         patch_size: int,
         resize_to_max_len: bool = True,
+        include_global_view: bool = True,
     ) -> Tuple[int, int]:
         """
         Get the number of patches (n_patches_x, n_patches_y) that will be used to process an image.
 
-        This method calculates how many patches the image will be split into based on the
-        image processor's configuration (do_image_splitting, max_image_size, size).
+        This method calculates how many visual tokens the image will produce based on the
+        image processor's configuration (do_image_splitting, max_image_size, size) and
+        the image_seq_len parameter.
+
+        For Idefics3-style models, images are split into sub-images, each producing
+        image_seq_len tokens arranged in a square grid. When image splitting is enabled,
+        an additional global view is prepended, adding image_seq_len tokens.
+
+        Note: When include_global_view is True (default), the returned grid dimensions
+        account for the global view by adding one extra row of tokens, which may not
+        perfectly match the spatial layout of the original image but ensures all tokens
+        are accounted for.
 
         Args:
             image_size: Tuple of (width, height) of the input image.
@@ -157,9 +181,11 @@ class ColModernVBertProcessor(BaseVisualRetrieverProcessor, Idefics3Processor):
                         patch calculation is based on image splitting, not vision encoder patches).
             resize_to_max_len: If True, resize the longest edge to size["longest_edge"] before
                                calculating patches. If False, use the original image size.
+            include_global_view: If True, account for the global view tokens added by Idefics3
+                                when image splitting is enabled. Defaults to True.
 
         Returns:
-            Tuple of (n_patches_x, n_patches_y) representing the number of patches in each dimension.
+            Tuple of (n_patches_x, n_patches_y) representing the number of visual tokens in each dimension.
         """
         width, height = image_size
 
@@ -202,5 +228,21 @@ class ColModernVBertProcessor(BaseVisualRetrieverProcessor, Idefics3Processor):
                 num_rows = math.ceil(resized_height / max_height)
                 num_cols = math.ceil(resized_width / max_width)
 
-        # Return (n_patches_x, n_patches_y) = (num_cols, num_rows)
-        return num_cols, num_rows
+        # Calculate tokens per split dimension
+        # Each split produces image_seq_len tokens arranged in a square grid
+        tokens_per_split_side = int(math.sqrt(self.image_seq_len))
+
+        # Total number of tokens in each dimension
+        n_patches_x = num_cols * tokens_per_split_side
+        n_patches_y = num_rows * tokens_per_split_side
+
+        # Account for global view if enabled
+        # Idefics3 prepends a global view when image splitting is enabled
+        # The global view adds image_seq_len tokens which we arrange as additional rows
+        if include_global_view and do_image_splitting and (num_rows > 1 or num_cols > 1):
+            # Global view tokens are arranged as additional rows at the top
+            # Number of additional rows = image_seq_len / n_patches_x
+            global_view_rows = self.image_seq_len // n_patches_x
+            n_patches_y += global_view_rows
+
+        return n_patches_x, n_patches_y
