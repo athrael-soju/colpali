@@ -1,3 +1,4 @@
+import math
 from typing import ClassVar, List, Optional, Tuple, Union
 
 import torch
@@ -5,6 +6,76 @@ from PIL import Image
 from transformers import BatchEncoding, BatchFeature, Idefics3Processor
 
 from colpali_engine.utils.processing_utils import BaseVisualRetrieverProcessor
+
+
+def _resize_output_size_rescale_to_max_len(
+    height: int, width: int, min_len: int = 1, max_len: Optional[int] = None
+) -> Tuple[int, int]:
+    """
+    Get the output size of the image after resizing given a dictionary specifying the max and min sizes.
+
+    Reused from transformers.models.idefics3.image_processing_idefics3.
+
+    Args:
+        height (`int`):
+            Height of the input image.
+        width (`int`):
+            Width of the input image.
+        min_len (`int`, *optional*, defaults to 1):
+            Minimum size of the output image.
+        max_len (`int`, *optional*, defaults to the maximum size of the image):
+            Maximum size of the output image.
+
+    Returns:
+        The output size of the image after resizing.
+    """
+    max_len = max(height, width) if max_len is None else max_len
+    aspect_ratio = width / height
+
+    if width >= height:
+        width = max_len
+        height = int(width / aspect_ratio)
+        if height % 2 != 0:
+            height += 1
+    elif height > width:
+        height = max_len
+        width = int(height * aspect_ratio)
+        if width % 2 != 0:
+            width += 1
+
+    # Avoid resizing to a size smaller than min_len
+    height = max(height, min_len)
+    width = max(width, min_len)
+    return height, width
+
+
+def _resize_for_vision_encoder(height: int, width: int, vision_encoder_max_size: int) -> Tuple[int, int]:
+    """
+    Resize image dimensions to be multiples of `vision_encoder_max_size` while preserving the aspect ratio.
+
+    Reused from transformers.models.idefics3.image_processing_idefics3.
+
+    Args:
+        height (`int`):
+            Height of the input image.
+        width (`int`):
+            Width of the input image.
+        vision_encoder_max_size (`int`):
+            Maximum size of the output image.
+
+    Returns:
+        The output size of the image after resizing.
+    """
+    aspect_ratio = width / height
+    if width >= height:
+        width = math.ceil(width / vision_encoder_max_size) * vision_encoder_max_size
+        height = int(width / aspect_ratio)
+        height = math.ceil(height / vision_encoder_max_size) * vision_encoder_max_size
+    elif height > width:
+        height = math.ceil(height / vision_encoder_max_size) * vision_encoder_max_size
+        width = int(height * aspect_ratio)
+        width = math.ceil(width / vision_encoder_max_size) * vision_encoder_max_size
+    return height, width
 
 
 class ColIdefics3Processor(BaseVisualRetrieverProcessor, Idefics3Processor):
@@ -72,5 +143,47 @@ class ColIdefics3Processor(BaseVisualRetrieverProcessor, Idefics3Processor):
         self,
         image_size: Tuple[int, int],
         patch_size: int,
+        resize_to_max_canvas: bool = True,
     ) -> Tuple[int, int]:
-        raise NotImplementedError("This method is not implemented for ColIdefics3.")
+        """
+        Get the number of patches (n_patches_x, n_patches_y) that will be used to process an image of
+        size (height, width) with the given patch size.
+
+        Args:
+            image_size: Tuple of (width, height) of the input image.
+            patch_size: Size of each patch (not used for Idefics3, included for API compatibility).
+            resize_to_max_canvas: Whether to resize the image to the max canvas size. Defaults to True.
+
+        Returns:
+            Tuple of (n_patches_x, n_patches_y) representing the number of patches in each dimension.
+
+        Note:
+            This method reuses the resizing logic from transformers.models.idefics3.image_processing_idefics3.
+        """
+        width, height = image_size
+        max_image_size = self.image_processor.max_image_size["longest_edge"]
+
+        if resize_to_max_canvas:
+            # Resize to max canvas size (longest_edge strategy)
+            height, width = _resize_output_size_rescale_to_max_len(height, width, max_len=max_image_size)
+
+        # Resize to vision encoder multiples
+        height, width = _resize_for_vision_encoder(height, width, max_image_size)
+
+        # Calculate the number of patches in each dimension
+        n_patches_y = math.ceil(height / max_image_size)
+        n_patches_x = math.ceil(width / max_image_size)
+
+        return n_patches_x, n_patches_y
+
+    def get_image_mask(self, batch_images: BatchFeature) -> torch.Tensor:
+        """
+        Get a tensor mask that identifies the image tokens in the batch.
+
+        Args:
+            batch_images: The output of the processor containing input_ids.
+
+        Returns:
+            A boolean tensor where True indicates an image token position.
+        """
+        return batch_images.input_ids == self.image_token_id
