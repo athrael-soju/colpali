@@ -52,6 +52,7 @@ class ColQwen3(Qwen3VLModel):
         # Pop custom arguments before passing to parent
         kwargs.pop("dim", None)  # Remove if passed, we use fixed 128
         kwargs.pop("mask_non_image_embeddings", None)
+        kwargs.pop("use_cache", None)  # Handled in forward, not init
 
         # Handle key_mapping for checkpoint conversion if needed
         key_mapping = kwargs.pop("key_mapping", None)
