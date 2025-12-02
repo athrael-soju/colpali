@@ -21,7 +21,7 @@ config:
     (): colpali_engine.utils.transformers_wrappers.AllPurposeWrapper
     class_to_instanciate: !ext colpali_engine.models.ColQwen3Processor
     pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"
-    max_num_visual_tokens: 768  # Reduced to allow larger batch size for more in-batch negatives
+    max_num_visual_tokens: 1024  # Aligned with ColQwen2
 
   # Model configuration
   model:
@@ -70,12 +70,12 @@ config:
     # Evaluation disabled - run vidore-benchmark after training
     eval_strategy: "no"
 
-    # Training schedule
+    # Training schedule (aligned with ColQwen2)
     num_train_epochs: 5
-    warmup_steps: 200
+    warmup_steps: 100
 
-    # Optimizer settings
-    learning_rate: 5e-4  # Higher LR for better gradient signal
+    # Optimizer settings (aligned with ColQwen2)
+    learning_rate: 2e-4
     weight_decay: 0.01
     lr_scheduler_type: "cosine"
     # optim: "adamw_torch_fused"  # Faster on RTX 5090
