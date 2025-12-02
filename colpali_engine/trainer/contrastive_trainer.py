@@ -53,6 +53,11 @@ class ContrastiveTrainer(Trainer):
         self.eval_dataset_list = eval_dataset_list
         self.compute_symetric_loss = compute_symetric_loss
 
+        # Set prefixes from data_collator for compute_loss
+        self.query_prefix = self.data_collator.query_prefix
+        self.pos_prefix = self.data_collator.pos_doc_prefix
+        self.neg_prefix = self.data_collator.neg_doc_prefix
+
     def get_train_dataloader(self) -> DataLoader:
         """
         Returns the training [`~torch.utils.data.DataLoader`].
