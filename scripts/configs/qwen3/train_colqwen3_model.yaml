@@ -15,14 +15,14 @@ config:
   processor:
     (): colpali_engine.utils.transformers_wrappers.AllPurposeWrapper
     class_to_instanciate: !ext colpali_engine.models.ColQwen3Processor
-    pretrained_model_name_or_path: "Qwen/Qwen3-VL-4B"  # Or use a local path
+    pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"  # Or Qwen3-VL-8B-Instruct for larger model
     max_num_visual_tokens: 1280  # Recommended by TomoroAI for ColQwen3
 
   # Model configuration
   model:
     (): colpali_engine.utils.transformers_wrappers.AllPurposeWrapper
     class_to_instanciate: !ext colpali_engine.models.ColQwen3
-    pretrained_model_name_or_path: "Qwen/Qwen3-VL-4B"  # Or use a local path
+    pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"  # Or Qwen3-VL-8B-Instruct for larger model
     torch_dtype: !ext torch.bfloat16
     use_cache: false
     attn_implementation: "flash_attention_2"

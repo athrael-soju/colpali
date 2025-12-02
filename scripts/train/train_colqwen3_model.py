@@ -40,8 +40,8 @@ def parse_args():
     parser.add_argument(
         "--base-model",
         type=str,
-        default="Qwen/Qwen3-VL-4B",
-        help="Base model path or HuggingFace model ID",
+        default="Qwen/Qwen3-VL-2B-Instruct",
+        help="Base model path or HuggingFace model ID (e.g., Qwen/Qwen3-VL-2B-Instruct or Qwen/Qwen3-VL-8B-Instruct)",
     )
     parser.add_argument(
         "--output-dir",
