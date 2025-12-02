@@ -4,7 +4,9 @@
 # Using Qwen3-VL-2B-Instruct backbone for comfortable memory headroom
 #
 # Usage:
-#   python scripts/train/train_colbert.py scripts/configs/qwen3/train_colqwen3_rtx5090.yaml
+#   USE_LOCAL_DATASET=0 python scripts/train/train_colbert.py scripts/configs/qwen3/train_colqwen3_rtx5090.yaml
+#
+# NOTE: USE_LOCAL_DATASET=0 loads data from HuggingFace (vidore/colpali_train_set)
 
 config:
   (): colpali_engine.trainer.colmodel_training.ColModelTrainingConfig
