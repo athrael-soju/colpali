@@ -1,0 +1,36 @@
+# HuggingFace Evaluation Datasets (Online)
+# These datasets are loaded directly from HuggingFace and have (query, image) pairs
+# suitable for in-training evaluation with ColPali models.
+#
+# Usage: Set USE_LOCAL_DATASET=0 when training to load from HuggingFace
+#
+# For proper ViDoRe V3 benchmark evaluation, use the vidore-benchmark package
+# after training is complete.
+
+syntheticDocQA_energy:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/syntheticDocQA_energy_test"
+
+syntheticDocQA_healthcare:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/syntheticDocQA_healthcare_industry_test"
+
+syntheticDocQA_ai:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/syntheticDocQA_artificial_intelligence_test"
+
+syntheticDocQA_government:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/syntheticDocQA_government_reports_test"
+
+docvqa_subsampled:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/docvqa_test_subsampled"
+
+infovqa_subsampled:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/infovqa_test_subsampled"
+
+tabfquad_subsampled:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/tabfquad_test_subsampled"

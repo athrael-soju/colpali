@@ -1,14 +1,19 @@
 # ViDoRe V3 Evaluation Datasets
-# These datasets are loaded from HuggingFace (vidore organization)
-
-vidore_v3_finance_en:
-  (): colpali_engine.utils.dataset_transformation.load_eval_set
-  dataset_path: "vidore/vidore_v3_finance_en"
-
-vidore_v3_energy:
-  (): colpali_engine.utils.dataset_transformation.load_eval_set
-  dataset_path: "vidore/vidore_v3_energy"
-
-vidore_v3_computer_science:
-  (): colpali_engine.utils.dataset_transformation.load_eval_set
-  dataset_path: "vidore/vidore_v3_computer_science"
+#
+# NOTE: ViDoRe V3 datasets use IR benchmark format (corpus, queries, qrels)
+# and are NOT compatible with in-training evaluation.
+#
+# For proper ViDoRe V3 evaluation, use the vidore-benchmark package after training:
+#
+#   pip install vidore-benchmark
+#   vidore-benchmark evaluate \
+#     --model-name your-trained-model \
+#     --collection vidore_v3 \
+#     --output-dir ./evaluation_results
+#
+# Dataset structure (each has configs: corpus, queries, qrels, documents_metadata):
+#   - vidore/vidore_v3_finance_en
+#   - vidore/vidore_v3_energy
+#   - vidore/vidore_v3_computer_science
+#
+# For in-training evaluation, use test_data_hf.yaml instead.

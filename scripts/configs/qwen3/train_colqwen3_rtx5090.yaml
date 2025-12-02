@@ -7,6 +7,12 @@
 #   USE_LOCAL_DATASET=0 python scripts/train/train_colbert.py scripts/configs/qwen3/train_colqwen3_rtx5090.yaml
 #
 # NOTE: USE_LOCAL_DATASET=0 loads data from HuggingFace (vidore/colpali_train_set)
+#
+# Evaluation:
+#   - In-training: Uses vidore test datasets (DocVQA, InfoVQA, SyntheticDocQA, etc.)
+#   - Post-training: Run vidore-benchmark for full ViDoRe V3 evaluation:
+#       pip install vidore-benchmark
+#       vidore-benchmark evaluate --model-name ./models/colqwen3-rtx5090 --collection vidore_v3
 
 config:
   (): colpali_engine.trainer.colmodel_training.ColModelTrainingConfig
@@ -33,7 +39,9 @@ config:
   # Dataset configuration
   train_dataset:
     (): colpali_engine.utils.dataset_transformation.load_train_set
-  eval_dataset: !import ../data/test_data_vidore3.yaml  # ViDoRe V3 evaluation
+  # Use HuggingFace datasets for in-training evaluation
+  # For proper ViDoRe V3 benchmark, run vidore-benchmark after training
+  eval_dataset: !import ../data/test_data_hf.yaml
 
   run_eval: true
   run_train: true
