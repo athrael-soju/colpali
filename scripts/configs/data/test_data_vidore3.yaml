@@ -1,0 +1,14 @@
+# ViDoRe V3 Evaluation Datasets
+# These datasets are loaded from HuggingFace (vidore organization)
+
+vidore_v3_finance_en:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/vidore_v3_finance_en"
+
+vidore_v3_energy:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/vidore_v3_energy"
+
+vidore_v3_computer_science:
+  (): colpali_engine.utils.dataset_transformation.load_eval_set
+  dataset_path: "vidore/vidore_v3_computer_science"
