@@ -1,0 +1,99 @@
+# ColQwen3 Training Configuration - RTX 5090 32GB with 8B Model
+#
+# AGGRESSIVE memory optimization for Qwen3-VL-8B on 32GB VRAM
+# Use this if you want maximum model quality at the cost of throughput
+#
+# Usage:
+#   python scripts/train/train_colbert.py scripts/configs/qwen3/train_colqwen3_rtx5090_8b.yaml
+
+config:
+  (): colpali_engine.trainer.colmodel_training.ColModelTrainingConfig
+  output_dir: !path ../../../models/colqwen3-rtx5090-8b
+
+  # Processor configuration
+  processor:
+    (): colpali_engine.utils.transformers_wrappers.AllPurposeWrapper
+    class_to_instanciate: !ext colpali_engine.models.ColQwen3Processor
+    pretrained_model_name_or_path: "Qwen/Qwen3-VL-8B-Instruct"
+    max_num_visual_tokens: 768  # Reduced from 1280 to save memory
+
+  # Model configuration
+  model:
+    (): colpali_engine.utils.transformers_wrappers.AllPurposeWrapper
+    class_to_instanciate: !ext colpali_engine.models.ColQwen3
+    pretrained_model_name_or_path: "Qwen/Qwen3-VL-8B-Instruct"
+    torch_dtype: !ext torch.bfloat16
+    use_cache: false
+    attn_implementation: "flash_attention_2"
+    trust_remote_code: true
+    dim: 128
+
+  # Dataset configuration
+  train_dataset:
+    (): colpali_engine.utils.dataset_transformation.load_train_set
+  eval_dataset: !import ../data/test_data.yaml
+
+  run_eval: true
+  run_train: true
+
+  # Loss function
+  loss_func:
+    (): colpali_engine.loss.late_interaction_losses.ColbertPairwiseCELoss
+
+  # Training arguments - AGGRESSIVE optimization for 8B on 32GB
+  tr_args:
+    (): transformers.training_args.TrainingArguments
+    output_dir: null
+    overwrite_output_dir: true
+
+    # === MEMORY-CONSTRAINED BATCH SETTINGS ===
+    per_device_train_batch_size: 2  # Small batch to fit 8B model
+    gradient_accumulation_steps: 32  # Effective batch size: 64
+
+    # Memory optimization - ALL enabled
+    gradient_checkpointing: true
+    gradient_checkpointing_kwargs: { "use_reentrant": false }
+
+    # Precision
+    bf16: true
+    bf16_full_eval: true
+
+    # 8-bit optimizer to save memory
+    optim: "paged_adamw_8bit"
+
+    # Evaluation - small batch for memory
+    per_device_eval_batch_size: 1
+    eval_strategy: "steps"
+    eval_steps: 200  # Less frequent eval to speed up
+
+    # Training schedule
+    num_train_epochs: 3  # Fewer epochs, larger model learns faster
+    warmup_steps: 300
+
+    # Lower LR for larger model
+    learning_rate: 5e-5
+    weight_decay: 0.01
+    lr_scheduler_type: "cosine"
+
+    # Data loading
+    dataloader_num_workers: 4  # Reduced to save CPU memory
+    dataloader_pin_memory: true
+
+    # Checkpointing
+    save_steps: 500
+    save_total_limit: 2
+    logging_steps: 10
+
+    # Logging
+    report_to: "wandb"
+
+  # LoRA with higher rank for larger model
+  peft_config:
+    (): peft.LoraConfig
+    r: 64  # Higher rank for 8B model
+    lora_alpha: 64
+    lora_dropout: 0.05
+    init_lora_weights: "gaussian"
+    bias: "none"
+    task_type: "FEATURE_EXTRACTION"
+    target_modules: '(.*(model).*(down_proj|gate_proj|up_proj|k_proj|q_proj|v_proj|o_proj).*$|.*(custom_text_proj).*$)'
