@@ -37,7 +37,9 @@ class ColQwen3(Qwen3VLModel):
             )
         super().__init__(config=config)
         self.dim = 128
-        self.custom_text_proj = nn.Linear(self.config.hidden_size, self.dim)
+        # Qwen3VL uses nested text_config for hidden_size
+        hidden_size = self.config.text_config.hidden_size
+        self.custom_text_proj = nn.Linear(hidden_size, self.dim)
         self.padding_side = "left"
         self.mask_non_image_embeddings = mask_non_image_embeddings
         self.post_init()
@@ -100,8 +102,10 @@ class ColQwen3(Qwen3VLModel):
         # Optionally mask non-image embeddings
         if "pixel_values" in kwargs and self.mask_non_image_embeddings:
             # Pools only the image embeddings
-            image_mask = (kwargs["input_ids"] == self.config.image_token_id).unsqueeze(-1)
-            proj = proj * image_mask
+            image_token_id = getattr(self.config, "image_token_id", None)
+            if image_token_id is not None:
+                image_mask = (kwargs["input_ids"] == image_token_id).unsqueeze(-1)
+                proj = proj * image_mask
 
         return proj
 
